@@ -43,7 +43,7 @@ end
 function init_libhdf5()
     status = ccall((:H5open, libhdf5), Cint, ())
     status < 0 && error("Can't initialize the HDF5 library")
-    nothing
+    return nothing
 end
 
 function h5_get_libversion()
@@ -1328,15 +1328,15 @@ function read(obj::DatasetOrAttribute, ::Type{A}) where {A<:FixedArray}
 end
 function read(obj::DatasetOrAttribute, ::Type{Array{A}}) where {A<:FixedArray}
     T = eltype(A)
-    if !(T<:HDF5Scalar)
+    if !(T <: HDF5Scalar)
         error("Sorry, not yet supported")
     end
     sz = size(A)
     dims = size(obj)
     data = Array{T}(undef,sz..., dims...)
     nd = length(sz)
-    hsz = Hsize[convert(Hsize,sz[nd-i+1]) for i = 1:nd]
-    memtype_id = h5t_array_create(hdf5_type_id(T), convert(Cuint, length(sz)), hsz)
+    hsz = Hsize[sz[nd-i+1] for i = 1:nd]
+    memtype_id = h5t_array_create(hdf5_type_id(T), length(sz), hsz)
     try
         h5d_read(obj.id, memtype_id, H5S_ALL, H5S_ALL, obj.xfer, data)
     finally
@@ -1598,26 +1598,58 @@ function readmmap(obj::HDF5Dataset, ::Type{Array{T}}) where {T}
     if isempty(dims)
         return T[]
     end
-    local fd
-    prop = h5d_get_access_plist(checkvalid(obj).id)
-    try
-        ret = Ptr{Cint}[0]
-        h5f_get_vfd_handle(obj.file.id, prop, ret)
-        fd = unsafe_load(ret[1])
-    finally
-        HDF5.h5p_close(prop)
+    if !Sys.iswindows()
+        local fdint
+        prop = h5d_get_access_plist(checkvalid(obj).id)
+        try
+            ret = Ref{Ptr{Cint}}()
+            h5f_get_vfd_handle(obj.file.id, prop, ret)
+            fdint = unsafe_load(ret[])
+        finally
+            HDF5.h5p_close(prop)
+        end
+        fd = fdio(fdint)
+    else
+        # This is a workaround since the regular code path does not work on windows
+        # (see #89 for background). The error is that "Mmap.mmap(fd, ...)" cannot
+        # create create a valid file mapping. The question is if the handler
+        # returned by "h5f_get_vfd_handle" has
+        # the correct format as required by the "fdio" function. The former
+        # calls
+        # https://gitlabext.iag.uni-stuttgart.de/libs/hdf5/blob/develop/src/H5FDcore.c#L1209
+        #
+        # The workaround is to create a new file handle, which should actually
+        # not make any problems. Since we need to know the permissions of the
+        # original file handle, we first retrieve them using the "h5f_get_intend"
+        # function
+
+        # Check permissions
+        intent = Ref{Cuint}()
+        h5f_get_intend(obj.file, intent)
+        if intent[] == HDF5.H5F_ACC_RDONLY || intent[] == HDF5.H5F_ACC_RDONLY
+            flag = "r"
+        else
+            flag = "r+"
+        end
+        fd = open(obj.file.filename, flag)
     end
 
     offset = h5d_get_offset(obj.id)
-    if offset == reinterpret(Hsize, convert(Hssize, -1))
+    if offset == -1
         error("Error mmapping array")
     end
     if offset % Base.datatype_alignment(T) == 0
-        return Mmap.mmap(fdio(fd), Array{T,length(dims)}, dims, offset)
+        A = Mmap.mmap(fd, Array{T,length(dims)}, dims, offset)
     else
-        A = Mmap.mmap(fdio(fd), Array{UInt8,1}, prod(dims)*sizeof(T), offset)
-        return reshape(reinterpret(T,A),dims)
+        Aflat = Mmap.mmap(fd, Array{UInt8,1}, prod(dims)*sizeof(T), offset)
+        A = reshape(reinterpret(T, Aflat), dims)
     end
+
+    if Sys.iswindows()
+        close(fd)
+    end
+
+    return A
 end
 
 function readmmap(obj::HDF5Dataset)
@@ -2098,6 +2130,7 @@ for (jlname, h5name, outtype, argtypes, argsyms, msg) in
      (:h5f_flush, :H5Fflush, Herr, (Hid, Cint), (:object_id, :scope,), "Error flushing object to file"),
      (:hf5start_swmr_write, :H5Fstart_swmr_write, Herr, (Hid,), (:id,), "Error starting SWMR write"),
      (:h5f_get_vfd_handle, :H5Fget_vfd_handle, Herr, (Hid, Hid, Ptr{Ptr{Cint}}), (:file_id, :fapl_id, :file_handle), "Error getting VFD handle"),
+     (:h5f_get_intend, :H5Fget_intent, Herr, (Hid, Ptr{Cuint}), (:file_id, :intent), "Error getting file intent"),
      (:h5g_close, :H5Gclose, Herr, (Hid,), (:group_id,), "Error closing group"),
      (:h5g_get_info, :H5Gget_info, Herr, (Hid, Ptr{H5Ginfo}), (:group_id, :buf), "Error getting group info"),
      (:h5o_get_info, :H5Oget_info1, Herr, (Hid, Ptr{H5Oinfo}), (:object_id, :buf), "Error getting object info"),
@@ -2530,7 +2563,7 @@ function __init__()
     rehash!(hdf5_obj_open, length(hdf5_obj_open.keys))
 
 
-    nothing
+    return nothing
 end
 
 end  # module
