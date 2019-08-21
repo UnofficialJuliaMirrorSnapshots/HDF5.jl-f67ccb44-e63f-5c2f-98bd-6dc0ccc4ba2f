@@ -1150,6 +1150,7 @@ function iterate(parent::Union{HDF5File, HDF5Group}, iter = (1,nothing))
 end
 
 lastindex(dset::HDF5Dataset) = length(dset)
+lastindex(dset::HDF5Dataset, d::Int) = size(dset, d)
 
 function parent(obj::Union{HDF5File, HDF5Group, HDF5Dataset})
     f = file(obj)
@@ -1171,13 +1172,13 @@ datatype(dset::HDF5Dataset) = HDF5Datatype(h5d_get_type(checkvalid(dset).id), fi
 datatype(dset::HDF5Attribute) = HDF5Datatype(h5a_get_type(checkvalid(dset).id), file(dset))
 
 # Create a datatype from in-memory types
-datatype(x::T) where {T<:HDF5Scalar} = HDF5Datatype(hdf5_type_id(T), false)
+datatype(x::HDF5Scalar) = HDF5Datatype(hdf5_type_id(typeof(x)), false)
 datatype(::Type{T}) where {T<:HDF5Scalar} = HDF5Datatype(hdf5_type_id(T), false)
 datatype(A::AbstractArray{T}) where {T<:HDF5Scalar} = HDF5Datatype(hdf5_type_id(T), false)
-function datatype(str::S) where {S<:String}
-    type_id = h5t_copy(hdf5_type_id(S))
+function datatype(str::String)
+    type_id = h5t_copy(hdf5_type_id(typeof(str)))
     h5t_set_size(type_id, max(sizeof(str), 1))
-    h5t_set_cset(type_id, cset(S))
+    h5t_set_cset(type_id, cset(typeof(str)))
     HDF5Datatype(type_id)
 end
 function datatype(str::Array{S}) where {S<:String}
@@ -2216,7 +2217,7 @@ for (jlname, h5name, outtype, argtypes, argsyms, ex_error) in
      (:h5f_get_access_plist, :H5Fget_access_plist, Hid, (Hid,), (:file_id,), :(error("Error getting file access property list"))),
      (:h5f_get_create_plist, :H5Fget_create_plist, Hid, (Hid,), (:file_id,), :(error("Error getting file create property list"))),
      (:h5f_get_name, :H5Fget_name, Cssize_t, (Hid, Ptr{UInt8}, Csize_t), (:obj_id, :buf, :buf_size), :(error("Error getting file name"))),
-     (:h5f_open, :H5Fopen, Hid, (Ptr{UInt8}, Cuint, Hid), (:pathname, :flags, :fapl_id), :(error("Error opening file ", pathname))),
+     (:h5f_open, :H5Fopen, Hid, (Cstring, Cuint, Hid), (:pathname, :flags, :fapl_id), :(error("Error opening file ", pathname))),
      (:h5g_create, :H5Gcreate2, Hid, (Hid, Ptr{UInt8}, Hid, Hid, Hid), (:loc_id, :pathname, :lcpl_id, :gcpl_id, :gapl_id), :(error("Error creating group ", h5i_get_name(loc_id), "/", pathname))),
      (:h5g_get_create_plist, :H5Gget_create_plist, Hid, (Hid,), (:group_id,), :(error("Error getting group create property list"))),
      (:h5g_get_objname_by_idx, :H5Gget_objname_by_idx, Hid, (Hid, Hsize, Ptr{UInt8}, Csize_t), (:loc_id, :idx, :pathname, :size), :(error("Error getting group object name ", h5i_get_name(loc_id), "/", pathname))),
@@ -2294,7 +2295,7 @@ end
 for (jlname, h5name, outtype, argtypes, argsyms, ex_error) in
     ((:h5a_exists, :H5Aexists, Htri, (Hid, Ptr{UInt8}), (:obj_id, :attr_name), :(error("Error checking whether attribute ", attr_name, " exists"))),
      (:h5a_exists_by_name, :H5Aexists_by_name, Htri, (Hid, Ptr{UInt8}, Ptr{UInt8}, Hid), (:loc_id, :obj_name, :attr_name, :lapl_id), :(error("Error checking whether object ", obj_name, " has attribute ", attr_name))),
-     (:h5f_is_hdf5, :H5Fis_hdf5, Htri, (Ptr{UInt8},), (:pathname,), :(error("Cannot access file ", pathname))),
+     (:h5f_is_hdf5, :H5Fis_hdf5, Htri, (Cstring,), (:pathname,), :(error("Cannot access file ", pathname))),
      (:h5i_is_valid, :H5Iis_valid, Htri, (Hid,), (:obj_id,), :(error("Cannot determine whether object is valid"))),
      (:h5l_exists, :H5Lexists, Htri, (Hid, Ptr{UInt8}, Hid), (:loc_id, :pathname, :lapl_id), :(error("Cannot determine whether ", pathname, " exists"))),
      (:h5s_is_simple, :H5Sis_simple, Htri, (Hid,), (:space_id,), :(error("Error determining whether dataspace is simple"))),
